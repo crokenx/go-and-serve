@@ -1,24 +1,46 @@
 package server
 
 import (
+	"bytes"
+	"io"
 	"log"
 	"net"
 	"strconv"
 	"sync/atomic"
+
+	"boot.httpserver/internal/request"
+	"boot.httpserver/internal/response"
 )
 
+type HandlerError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *HandlerError) writeError(w io.Writer) {
+	response.WriteStatus(w, response.StatusCode(e.StatusCode))
+	messageBytes := []byte(e.Message)
+	headers := response.GetDefaultHeaders(len(messageBytes))
+	response.WriteHeaders(w, headers)
+	w.Write(messageBytes)
+}
+
+type Handler func(w io.Writer, req *request.Request) *HandlerError
+
 type Server struct {
+	handler   Handler
 	listening atomic.Bool
 	listener  net.Listener
 }
 
-func Serve(port int) (*Server, error) {
+func Serve(port int, handler Handler) (*Server, error) {
 	server := &Server{}
 	listener, err := net.Listen("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
 		log.Fatal(err)
 	}
 	server.listener = listener
+	server.handler = handler
 	go server.listen()
 	server.listening.Store(true)
 	return server, nil
@@ -41,12 +63,46 @@ func (s *Server) listen() {
 func (s *Server) handle(conn net.Conn) {
 	defer conn.Close()
 	log.Printf("Got connection from %s\n", conn.RemoteAddr())
-	response := []byte(
-		"HTTP/1.1 200 OK\r\n" +
-			"Content-Type: text/plain\r\n" +
-			"\r\n" +
-			"Hello World!\n")
-	conn.Write(response)
+
+	rq, err := request.RequestFromReader(conn)
+
+	if err != nil {
+		errorHandler := &HandlerError{
+			StatusCode: 500,
+			Message:    err.Error(),
+		}
+		errorHandler.writeError(conn)
+		log.Printf("Error creating error: %v\n", err)
+		return
+	}
+
+	buf := bytes.NewBuffer([]byte{})
+	hErr := s.handler(buf, rq)
+
+	if hErr != nil {
+		hErr.writeError(conn)
+		return
+	}
+
+	b := buf.Bytes()
+	response.WriteStatus(conn, response.OK)
+	headers := response.GetDefaultHeaders(len(b))
+	response.WriteHeaders(conn, headers)
+	conn.Write(b)
+	return
+	/*err = response.WriteStatus(conn, 200)
+
+	if err != nil {
+		log.Printf("Error writing response: %v\n", err)
+	}
+
+	headers := response.GetDefaultHeaders(0)
+
+	err = response.WriteHeaders(conn, headers)
+
+	if err != nil {
+		log.Printf("Error writing response: %v\n", err)
+	}*/
 }
 
 func (s *Server) Close() error {
