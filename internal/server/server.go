@@ -25,7 +25,7 @@ func (e *HandlerError) writeError(w io.Writer) {
 	w.Write(messageBytes)
 }
 
-type Handler func(w io.Writer, req *request.Request) *HandlerError
+type Handler func(w *response.Writer, req *request.Request)
 
 type Server struct {
 	handler   Handler
@@ -77,32 +77,13 @@ func (s *Server) handle(conn net.Conn) {
 	}
 
 	buf := bytes.NewBuffer([]byte{})
-	hErr := s.handler(buf, rq)
+	writer := &response.Writer{}
+	writer.Wrt = buf
 
-	if hErr != nil {
-		hErr.writeError(conn)
-		return
-	}
+	s.handler(writer, rq)
 
 	b := buf.Bytes()
-	response.WriteStatus(conn, response.OK)
-	headers := response.GetDefaultHeaders(len(b))
-	response.WriteHeaders(conn, headers)
 	conn.Write(b)
-	return
-	/*err = response.WriteStatus(conn, 200)
-
-	if err != nil {
-		log.Printf("Error writing response: %v\n", err)
-	}
-
-	headers := response.GetDefaultHeaders(0)
-
-	err = response.WriteHeaders(conn, headers)
-
-	if err != nil {
-		log.Printf("Error writing response: %v\n", err)
-	}*/
 }
 
 func (s *Server) Close() error {

@@ -74,6 +74,10 @@ func (h Headers) Get(key string) (string, bool) {
 	return h[key], true
 }
 
+func (h Headers) Set(key string, value string) {
+	h[key] = value
+}
+
 func NewHeaders() Headers {
 	return make(Headers)
 }
