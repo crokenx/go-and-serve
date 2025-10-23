@@ -38,7 +38,7 @@ func (w *Writer) WriteStatusLine(statusCode StatusCode) error {
 
 func (w *Writer) WriteHeaders(headers headers.Headers) error {
 	if w.WriterState != WRITINGHEADERS {
-		return fmt.Errorf("cannot write status line in state %d", w.WriterState)
+		return fmt.Errorf("cannot write headers in state %d", w.WriterState)
 	}
 	defer func() { w.WriterState = WRITINGBODY }()
 	for k, v := range headers {
@@ -56,11 +56,36 @@ func (w *Writer) WriteHeaders(headers headers.Headers) error {
 
 func (w *Writer) WriteBody(p []byte) (int, error) {
 	if w.WriterState != WRITINGBODY {
-		return 0, fmt.Errorf("cannot write status line in state %d", w.WriterState)
+		return 0, fmt.Errorf("cannot write body in state %d", w.WriterState)
 	}
 	n, err := w.Wrt.Write(p)
 	if err != nil {
 		return n, err
 	}
 	return n, nil
+}
+
+func (w *Writer) WriteChunkedBody(p []byte) (int, error) {
+	if w.WriterState != WRITINGBODY {
+		return 0, fmt.Errorf("cannot write body in state %d", w.WriterState)
+	}
+
+	chunkHeader := fmt.Sprintf("%x\r\n", len(p))
+	if _, err := io.WriteString(w.Wrt, chunkHeader); err != nil {
+		return 0, err
+	}
+
+	if _, err := w.Wrt.Write(p); err != nil {
+		return 0, err
+	}
+
+	if _, err := io.WriteString(w.Wrt, "\r\n"); err != nil {
+		return 0, err
+	}
+
+	return len(p), nil
+}
+
+func (w *Writer) WriteChunkedBodyDone() (int, error) {
+	return w.Wrt.Write([]byte("0\r\n\r\n"))
 }
