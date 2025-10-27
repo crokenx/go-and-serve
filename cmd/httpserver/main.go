@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -42,12 +44,18 @@ func handler(w *response.Writer, req *request.Request) {
 		statusCode = response.INTERNALERROR
 		body = "<html>\n  <head>\n    <title>500 Internal Server Error</title>\n  </head>\n  <body>\n    <h1>Internal Server Error</h1>\n    <p>Okay, you know what? This one is on me.</p>\n  </body>\n</html>\r\n"
 	}
+
 	err := w.WriteStatusLine(statusCode)
 	if err != nil {
 		log.Printf("error writing status line: %v", err)
 	}
 
 	h := response.GetDefaultHeaders(len(body))
+
+	if req.RequestLine.RequestTarget == "/video" {
+		videoHandler(w, h, req.RequestLine.RequestTarget)
+		return
+	}
 
 	if proxying, target := shouldProxy(req); proxying {
 		proxyRequest(w, h, target)
@@ -73,6 +81,8 @@ func shouldProxy(req *request.Request) (bool, string) {
 func proxyRequest(w *response.Writer, headers headers.Headers, target string) {
 	delete(headers, "Content-Length")
 	headers.Set("Transfer-Encoding", "chunked")
+	headers.Set("Trailer", "X-Content-Sha256, X-Content-Length")
+
 	w.WriteHeaders(headers)
 	res, err := http.Get("https://httpbin.org" + target)
 	log.Printf("proxying %s to https://httpbin.org%s\n", target, target)
@@ -80,9 +90,12 @@ func proxyRequest(w *response.Writer, headers headers.Headers, target string) {
 		log.Printf("error proxying request: %v", err)
 	}
 	buff := make([]byte, 1024)
+	totalBuff := make([]byte, 0, 1024)
 
 	for {
 		n, e := res.Body.Read(buff)
+		totalBuff = append(totalBuff, buff[:n]...)
+
 		log.Printf("chunking %d bytes\n", n)
 		if e == io.EOF {
 			log.Printf("EOF | ending proxying: %v", e)
@@ -92,13 +105,27 @@ func proxyRequest(w *response.Writer, headers headers.Headers, target string) {
 			log.Printf("error proxying response: %v", e)
 			break
 		}
-		n, e = w.WriteChunkedBody(buff[:n])
+		_, e = w.WriteChunkedBody(buff[:n])
 		if e != nil {
 			log.Printf("error proxying response: %v", e)
 		}
-
-		copy(buff, buff[n:])
 	}
-
+	hash := sha256.Sum256(totalBuff)
+	trailers := map[string]string{
+		"X-Content-Sha256": fmt.Sprintf("%x", hash),
+		"X-Content-Length": fmt.Sprintf("%d", len(totalBuff)),
+	}
 	w.WriteChunkedBodyDone()
+	w.WriteTrailers(trailers)
+}
+
+func videoHandler(w *response.Writer, headers headers.Headers, target string) {
+	delete(headers, "Content-Length")
+	headers.Set("Content-Type", "video/mp4")
+	w.WriteHeaders(headers)
+	data, err := os.ReadFile("assets/vim.mp4")
+	if err != nil {
+		log.Printf("error reading video")
+	}
+	w.WriteBody(data)
 }
